@@ -1,54 +1,55 @@
 # Dependencies
-node_modules/
+backend/node_modules/
 
 # Environment variables & secrets
-.env
-.env.*
-!.env.example
+*/.env
+*/.env.*
+!*/.env.example
 
 # Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-logs/
-*.log
+backend/npm-debug.log*
+backend/yarn-debug.log*
+backend/yarn-error.log*
+backend/pnpm-debug.log*
+backend/logs/
+backend/*.log
 
 # Runtime files
-pids/
-*.pid
-*.pid.lock
-*.seed
+backend/pids/
+backend/*.pid
+backend/*.pid.lock
+backend/*.seed
 
 # Coverage & build artifacts
-coverage/
-dist/
-build/
-.tmp/
-tmp/
+backend/coverage/
+backend/dist/
+backend/build/
+backend/.tmp/
+backend/tmp/
 
 # OS / editor files
 .DS_Store
 Thumbs.db
 .vscode/
+*/.idea/
 .idea/
 
 # Android/Gradle
-.gradle/
-app/build/
-local.properties
-.externalNativeBuild
-.cxx
-Captures/
+android/.gradle/
+android/app/build/
+android/local.properties
+android/.externalNativeBuild
+android/.cxx
+android/Captures/
 
 # Kotlin
-.kotlin/
-*.kotlin_module
+android/.kotlin/
+android/*.kotlin_module
 
 # Signing files
-*.jks
-*.keystore
-*.p12
+android/*.jks
+android/*.keystore
+android/*.p12
 
 # IDE files
-*.iml
+android/*.iml
