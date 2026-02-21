@@ -22,6 +22,9 @@
   },
   "homepage": "https://github.com/sunain-s/HackLondon2026#readme",
   "dependencies": {
-    "express": "^4.21.2"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^7.1.0",
+    "mongoose": "^8.10.1"
   }
 }

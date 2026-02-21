@@ -1,5 +1,8 @@
+require("dotenv").config();
+
 const crypto = require("crypto");
 const express = require("express");
+const mongoose = require("mongoose");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -7,6 +10,35 @@ const maxClockSkewMs = Number(process.env.MAX_CLOCK_SKEW_MS || 5 * 60 * 1000);
 const clientId = process.env.CLIENT_ID || "android-app";
 const clientSecret = process.env.CLIENT_SECRET || "dev-client-secret";
 const serverSigningSecret = process.env.SERVER_SIGNING_SECRET || "dev-server-signing-secret";
+
+const videoSubmissionSchema = new mongoose.Schema(
+  {
+    videoHash: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      required: true,
+    },
+    authContext: {
+      clientId: { type: String, required: true },
+      timestamp: { type: Number, required: true },
+      nonce: { type: String, required: true },
+    },
+    firstSeenAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  {
+    versionKey: false,
+  }
+);
+
+const VideoSubmission = mongoose.model("VideoSubmission", videoSubmissionSchema);
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -51,7 +83,7 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-app.post("/api/v1/videos/submit", (req, res) => {
+app.post("/api/v1/videos/submit", async (req, res) => {
   const { videoHash, metadata, auth } = req.body || {};
 
   if (!videoHash || typeof videoHash !== "string") {
@@ -105,25 +137,69 @@ app.post("/api/v1/videos/submit", (req, res) => {
     return res.status(401).json({ error: "Invalid requestSignature" });
   }
 
+  let alreadyExists = false;
+
+  try {
+    const existing = await VideoSubmission.findOne({ videoHash: normalizedHash }).lean();
+    alreadyExists = Boolean(existing);
+
+    if (!alreadyExists) {
+      await VideoSubmission.create({
+        videoHash: normalizedHash,
+        metadata,
+        authContext: {
+          clientId: requestClientId,
+          timestamp,
+          nonce,
+        },
+      });
+    }
+  } catch (error) {
+    if (error && error.code === 11000) {
+      alreadyExists = true;
+    } else {
+      console.error("MongoDB write/read error:", error);
+      return res.status(500).json({ error: "Database operation failed" });
+    }
+  }
+
   const responseData = {
     videoHash: normalizedHash,
     metadata,
     requestClientId,
     timestamp,
     nonce,
+    alreadyExists,
     receivedAt: now,
   };
 
   const serverSignature = signPayload(stableStringify(responseData), serverSigningSecret);
 
   return res.status(200).json({
-    status: "accepted",
+    status: "verified",
     authVerified: true,
+    alreadyExists,
     serverSignature,
     data: responseData,
   });
 });
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+async function startServer() {
+  const mongoUri = process.env.MONGODB_URI;
+
+  if (!mongoUri) {
+    throw new Error("MONGODB_URI is required");
+  }
+
+  await mongoose.connect(mongoUri);
+  console.log("Connected to MongoDB Atlas");
+
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("Failed to start server:", error);
+  process.exit(1);
 });

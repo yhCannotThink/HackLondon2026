@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const assert = require("assert");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
@@ -9,6 +11,13 @@ if (typeof fetch !== "function") {
 const CLIENT_ID = "android-app";
 const CLIENT_SECRET = "dev-client-secret";
 const SERVER_SIGNING_SECRET = "dev-server-signing-secret";
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI is required to run API tests.");
+  console.error("Set it in .env or run: MONGODB_URI='mongodb+srv://...' npm run test:api");
+  process.exit(1);
+}
 
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
@@ -53,6 +62,20 @@ async function waitForServer(url, timeoutMs = 8000) {
   throw new Error("Server did not become ready in time");
 }
 
+async function waitForLog(logBufferRef, expectedText, timeoutMs = 8000) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    if (logBufferRef.current.includes(expectedText)) {
+      return;
+    }
+
+    await sleep(100);
+  }
+
+  throw new Error(`Expected startup log not found: ${expectedText}`);
+}
+
 function createSignedBody({
   videoHash,
   metadata,
@@ -92,21 +115,38 @@ async function postJson(url, payload) {
 (async () => {
   const port = 3300 + Math.floor(Math.random() * 1000);
   const baseUrl = `http://127.0.0.1:${port}`;
+  const serverLogs = { current: "" };
 
   const server = spawn(process.execPath, ["src/server.js"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       PORT: String(port),
+      MONGODB_URI,
       CLIENT_ID,
       CLIENT_SECRET,
       SERVER_SIGNING_SECRET,
       MAX_CLOCK_SKEW_MS: "300000",
     },
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  server.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    serverLogs.current += text;
+    process.stdout.write(text);
+  });
+
+  server.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    serverLogs.current += text;
+    process.stderr.write(text);
   });
 
   try {
+    await waitForLog(serverLogs, "Connected to MongoDB Atlas");
+    console.log("✓ MongoDB connection startup log");
+
     await waitForServer(`${baseUrl}/health`);
 
     const healthResponse = await fetch(`${baseUrl}/health`);
@@ -123,8 +163,9 @@ async function postJson(url, payload) {
 
     const validResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
     assert.equal(validResult.response.status, 200);
-    assert.equal(validResult.body.status, "accepted");
+    assert.equal(validResult.body.status, "verified");
     assert.equal(validResult.body.authVerified, true);
+    assert.equal(validResult.body.alreadyExists, false);
     assert.equal(typeof validResult.body.serverSignature, "string");
     assert.equal(validResult.body.data.videoHash, validPayload.videoHash);
 
@@ -134,6 +175,12 @@ async function postJson(url, payload) {
     );
     assert.equal(validResult.body.serverSignature, expectedServerSignature);
     console.log("✓ valid submit request");
+
+    const duplicateResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
+    assert.equal(duplicateResult.response.status, 200);
+    assert.equal(duplicateResult.body.status, "verified");
+    assert.equal(duplicateResult.body.alreadyExists, true);
+    console.log("✓ duplicate hash marked as alreadyExists");
 
     const badSignaturePayload = {
       ...validPayload,
@@ -172,6 +219,19 @@ async function postJson(url, payload) {
     assert.equal(staleTimestampResult.response.status, 401);
     assert.equal(staleTimestampResult.body.error, "Request timestamp is outside allowed clock skew");
     console.log("✓ stale timestamp rejected");
+
+    const unknownClientPayload = createSignedBody({
+      videoHash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      metadata,
+      clientId: "wrong-client",
+    });
+    const unknownClientResult = await postJson(
+      `${baseUrl}/api/v1/videos/submit`,
+      unknownClientPayload
+    );
+    assert.equal(unknownClientResult.response.status, 401);
+    assert.equal(unknownClientResult.body.error, "Unknown clientId");
+    console.log("✓ unknown client rejected");
 
     console.log("\nAll API checks passed.");
   } catch (error) {
