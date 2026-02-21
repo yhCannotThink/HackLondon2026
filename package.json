@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
+    "test:api": "node tests/api.e2e.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
