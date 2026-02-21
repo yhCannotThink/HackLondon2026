@@ -11,6 +11,7 @@ if (typeof fetch !== "function") {
 const CLIENT_ID = "android-app";
 const CLIENT_SECRET = "dev-client-secret";
 const MONGODB_URI = process.env.MONGODB_URI;
+const SOLANA_PRIVATE_KEY_JSON = process.env.SOLANA_PRIVATE_KEY_JSON;
 
 if (!MONGODB_URI) {
   console.error("MONGODB_URI is required to run API tests.");
@@ -36,8 +37,8 @@ function signPayload(payload, secret) {
   return crypto.createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-function buildClientSignTarget(videoHash, metadata, timestamp, nonce) {
-  return [videoHash, stableStringify(metadata || {}), String(timestamp), nonce].join(".");
+function buildClientSignTarget(videoHash, mediaType, metadata, timestamp, nonce) {
+  return [videoHash, mediaType, stableStringify(metadata || {}), String(timestamp), nonce].join(".");
 }
 
 function randomSha256Hex() {
@@ -81,17 +82,19 @@ async function waitForLog(logBufferRef, expectedText, timeoutMs = 8000) {
 
 function createSignedBody({
   videoHash,
+  mediaType = "video",
   metadata,
   timestamp = Date.now(),
   nonce = crypto.randomBytes(12).toString("hex"),
   clientId = CLIENT_ID,
 }) {
   const normalizedHash = videoHash.trim().toLowerCase();
-  const signTarget = buildClientSignTarget(normalizedHash, metadata, timestamp, nonce);
+  const signTarget = buildClientSignTarget(normalizedHash, mediaType, metadata, timestamp, nonce);
   const requestSignature = signPayload(signTarget, CLIENT_SECRET);
 
   return {
     videoHash,
+    mediaType,
     metadata,
     auth: {
       clientId,
@@ -166,20 +169,21 @@ async function postJson(url, payload) {
 
     const validResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
     assert.equal(validResult.response.status, 200);
-    assert.deepEqual(validResult.body, {
-      status: "verified",
-      alreadyExists: false,
-      txId: null,
-    });
+    assert.equal(validResult.body.status, "verified");
+    assert.equal(validResult.body.alreadyExists, false);
+    if (SOLANA_PRIVATE_KEY_JSON) {
+      assert.equal(typeof validResult.body.txId, "string");
+      assert.ok(validResult.body.txId.length > 0);
+    } else {
+      assert.equal(validResult.body.txId, null);
+    }
     console.log("✓ valid submit request");
 
     const duplicateResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
     assert.equal(duplicateResult.response.status, 200);
-    assert.deepEqual(duplicateResult.body, {
-      status: "verified",
-      alreadyExists: true,
-      txId: null,
-    });
+    assert.equal(duplicateResult.body.status, "verified");
+    assert.equal(duplicateResult.body.alreadyExists, true);
+    assert.equal(duplicateResult.body.txId, validResult.body.txId);
     console.log("✓ duplicate hash marked as alreadyExists");
 
     const badSignaturePayload = {
@@ -232,6 +236,22 @@ async function postJson(url, payload) {
     assert.equal(unknownClientResult.response.status, 401);
     assert.equal(unknownClientResult.body.error, "Unknown clientId");
     console.log("✓ unknown client rejected");
+
+    const invalidMediaTypePayload = createSignedBody({
+      videoHash: randomSha256Hex(),
+      mediaType: "image",
+      metadata,
+    });
+    const invalidMediaTypeResult = await postJson(
+      `${baseUrl}/api/v1/videos/submit`,
+      invalidMediaTypePayload
+    );
+    assert.equal(invalidMediaTypeResult.response.status, 400);
+    assert.equal(
+      invalidMediaTypeResult.body.error,
+      "mediaType must be either 'video' or 'audio'"
+    );
+    console.log("✓ invalid mediaType rejected");
 
     console.log("\nAll API checks passed.");
   } catch (error) {
