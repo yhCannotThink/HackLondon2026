@@ -1,0 +1,30 @@
+{
+  "name": "hacklondon2026",
+  "version": "1.0.0",
+  "description": "HackLondon 2026 repository",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test:api": "node tests/api.e2e.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunain-s/HackLondon2026.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/sunain-s/HackLondon2026/issues"
+  },
+  "homepage": "https://github.com/sunain-s/HackLondon2026#readme",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^7.1.0",
+    "mongoose": "^8.10.1"
+  }
+}
