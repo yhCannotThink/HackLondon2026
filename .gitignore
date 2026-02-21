@@ -32,3 +32,23 @@ tmp/
 Thumbs.db
 .vscode/
 .idea/
+
+# Android/Gradle
+.gradle/
+app/build/
+local.properties
+.externalNativeBuild
+.cxx
+Captures/
+
+# Kotlin
+.kotlin/
+*.kotlin_module
+
+# Signing files
+*.jks
+*.keystore
+*.p12
+
+# IDE files
+*.iml
