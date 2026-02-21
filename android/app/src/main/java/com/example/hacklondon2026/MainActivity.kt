@@ -1,20 +1,21 @@
 package com.example.hacklondon2026
 
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Videocam
@@ -24,11 +25,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.hacklondon2026.ui.components.ActionButton
+import com.example.hacklondon2026.ui.components.FeatureItem
+import com.example.hacklondon2026.ui.components.InfoBox
 import com.example.hacklondon2026.ui.theme.*
 
 class MainActivity : ComponentActivity() {
@@ -45,6 +49,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun DeepFakeDetectorScreen() {
+    val context = LocalContext.current
+    var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
+    
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri ->
+            selectedVideoUri = uri
+            if (uri != null) {
+                Toast.makeText(context, "Video selected!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
     Scaffold(
         bottomBar = {
             BottomNavigationBar()
@@ -65,11 +82,57 @@ fun DeepFakeDetectorScreen() {
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                InfoBox()
+                InfoBox(
+                    text = "Upload or record a video to analyze for deepfake manipulation using advanced AI detection."
+                )
                 
-                ActionButtons()
+                if (selectedVideoUri != null) {
+                    SelectedVideoInfo(selectedVideoUri!!)
+                }
+                
+                ActionButtons(
+                    onUploadClick = {
+                        videoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    }
+                )
                 
                 DetectionFeaturesSection()
+            }
+        }
+    }
+}
+
+@Composable
+fun SelectedVideoInfo(uri: Uri) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = SuccessGreen
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = "Video Ready for Analysis",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "Path: ${uri.path?.takeLast(30)}...",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
             }
         }
     }
@@ -108,34 +171,7 @@ fun HeaderSection() {
 }
 
 @Composable
-fun InfoBox() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(LightBlueBg)
-            .border(1.dp, InfoBorder, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Info,
-            contentDescription = null,
-            tint = MainBlue,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = "Upload or record a video to analyze for deepfake manipulation using advanced AI detection.",
-            color = Color.DarkGray,
-            fontSize = 14.sp,
-            lineHeight = 20.sp
-        )
-    }
-}
-
-@Composable
-fun ActionButtons() {
+fun ActionButtons(onUploadClick: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ActionButton(
             title = "Record Video",
@@ -150,56 +186,8 @@ fun ActionButtons() {
             subtitle = "Select from your device",
             icon = Icons.Default.FileUpload,
             backgroundColor = DarkButton,
-            onClick = { /* Placeholder */ }
+            onClick = onUploadClick
         )
-    }
-}
-
-@Composable
-fun ActionButton(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    backgroundColor: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(backgroundColor)
-            .clickable(onClick = onClick)
-            .padding(20.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.2f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-        Column {
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = subtitle,
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 14.sp
-            )
-        }
     }
 }
 
@@ -236,38 +224,6 @@ fun DetectionFeaturesSection() {
             title = "Real-time Processing",
             description = "Fast results powered by AI algorithms"
         )
-    }
-}
-
-@Composable
-fun FeatureItem(title: String, description: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.CheckCircle,
-            contentDescription = null,
-            tint = SuccessGreen,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = title,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = Color.Black
-            )
-            Text(
-                text = description,
-                fontSize = 13.sp,
-                color = Color.Gray,
-                lineHeight = 18.sp
-            )
-        }
     }
 }
 
