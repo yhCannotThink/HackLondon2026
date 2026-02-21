@@ -10,7 +10,6 @@ if (typeof fetch !== "function") {
 
 const CLIENT_ID = "android-app";
 const CLIENT_SECRET = "dev-client-secret";
-const SERVER_SIGNING_SECRET = "dev-server-signing-secret";
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
@@ -39,6 +38,10 @@ function signPayload(payload, secret) {
 
 function buildClientSignTarget(videoHash, metadata, timestamp, nonce) {
   return [videoHash, stableStringify(metadata || {}), String(timestamp), nonce].join(".");
+}
+
+function randomSha256Hex() {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 async function sleep(ms) {
@@ -125,7 +128,6 @@ async function postJson(url, payload) {
       MONGODB_URI,
       CLIENT_ID,
       CLIENT_SECRET,
-      SERVER_SIGNING_SECRET,
       MAX_CLOCK_SKEW_MS: "300000",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -156,30 +158,28 @@ async function postJson(url, payload) {
     console.log("✓ health endpoint");
 
     const metadata = { source: "android", durationMs: 1234, tags: ["demo"] };
+    const uniqueVideoHash = randomSha256Hex();
     const validPayload = createSignedBody({
-      videoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      videoHash: uniqueVideoHash,
       metadata,
     });
 
     const validResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
     assert.equal(validResult.response.status, 200);
-    assert.equal(validResult.body.status, "verified");
-    assert.equal(validResult.body.authVerified, true);
-    assert.equal(validResult.body.alreadyExists, false);
-    assert.equal(typeof validResult.body.serverSignature, "string");
-    assert.equal(validResult.body.data.videoHash, validPayload.videoHash);
-
-    const expectedServerSignature = signPayload(
-      stableStringify(validResult.body.data),
-      SERVER_SIGNING_SECRET
-    );
-    assert.equal(validResult.body.serverSignature, expectedServerSignature);
+    assert.deepEqual(validResult.body, {
+      status: "verified",
+      alreadyExists: false,
+      txId: null,
+    });
     console.log("✓ valid submit request");
 
     const duplicateResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
     assert.equal(duplicateResult.response.status, 200);
-    assert.equal(duplicateResult.body.status, "verified");
-    assert.equal(duplicateResult.body.alreadyExists, true);
+    assert.deepEqual(duplicateResult.body, {
+      status: "verified",
+      alreadyExists: true,
+      txId: null,
+    });
     console.log("✓ duplicate hash marked as alreadyExists");
 
     const badSignaturePayload = {
@@ -208,7 +208,7 @@ async function postJson(url, payload) {
     console.log("✓ invalid hash rejected");
 
     const staleTimestampPayload = createSignedBody({
-      videoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      videoHash: randomSha256Hex(),
       metadata,
       timestamp: Date.now() - 10 * 60 * 1000,
     });
@@ -221,7 +221,7 @@ async function postJson(url, payload) {
     console.log("✓ stale timestamp rejected");
 
     const unknownClientPayload = createSignedBody({
-      videoHash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      videoHash: randomSha256Hex(),
       metadata,
       clientId: "wrong-client",
     });

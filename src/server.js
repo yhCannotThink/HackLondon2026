@@ -9,7 +9,6 @@ const port = process.env.PORT || 3000;
 const maxClockSkewMs = Number(process.env.MAX_CLOCK_SKEW_MS || 5 * 60 * 1000);
 const clientId = process.env.CLIENT_ID || "android-app";
 const clientSecret = process.env.CLIENT_SECRET || "dev-client-secret";
-const serverSigningSecret = process.env.SERVER_SIGNING_SECRET || "dev-server-signing-secret";
 
 const videoSubmissionSchema = new mongoose.Schema(
   {
@@ -164,24 +163,12 @@ app.post("/api/v1/videos/submit", async (req, res) => {
   }
 
   const responseData = {
-    videoHash: normalizedHash,
-    metadata,
-    requestClientId,
-    timestamp,
-    nonce,
+    status: "verified",
     alreadyExists,
-    receivedAt: now,
+    txId: null,
   };
 
-  const serverSignature = signPayload(stableStringify(responseData), serverSigningSecret);
-
-  return res.status(200).json({
-    status: "verified",
-    authVerified: true,
-    alreadyExists,
-    serverSignature,
-    data: responseData,
-  });
+  return res.status(200).json(responseData);
 });
 
 async function startServer() {
