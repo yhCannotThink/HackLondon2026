@@ -1,5 +1,6 @@
 package com.example.hacklondon2026
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -91,6 +92,9 @@ fun DeepFakeDetectorScreen() {
                 }
                 
                 ActionButtons(
+                    onRecordClick = {
+                        context.startActivity(Intent(context, CameraActivity::class.java))
+                    },
                     onUploadClick = {
                         videoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
@@ -171,14 +175,14 @@ fun HeaderSection() {
 }
 
 @Composable
-fun ActionButtons(onUploadClick: () -> Unit) {
+fun ActionButtons(onRecordClick: () -> Unit, onUploadClick: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ActionButton(
             title = "Record Video",
             subtitle = "Capture new video to analyze",
             icon = Icons.Default.Videocam,
             backgroundColor = MainBlue,
-            onClick = { /* Placeholder */ }
+            onClick = onRecordClick
         )
         
         ActionButton(
