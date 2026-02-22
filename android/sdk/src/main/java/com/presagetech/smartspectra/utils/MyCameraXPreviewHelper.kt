@@ -27,7 +27,7 @@ import java.util.concurrent.ExecutorService
 
 
 @ExperimentalCamera2Interop
-internal class MyCameraXPreviewHelper {
+class MyCameraXPreviewHelper {
     fun interface OnCameraImageProxyListener {
         fun onImageProxy(image: ImageProxy)
     }
@@ -182,7 +182,7 @@ internal class MyCameraXPreviewHelper {
         camera2Control.captureRequestOptions = optionsBuilder.build()
     }
 
-    internal companion object {
+    companion object {
         // Target frame and view resolution size in landscape.
         val TARGET_SIZE = Size(720,1280)
 
