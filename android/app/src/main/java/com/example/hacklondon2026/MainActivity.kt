@@ -31,10 +31,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.example.hacklondon2026.ui.components.ActionButton
 import com.example.hacklondon2026.ui.components.FeatureItem
 import com.example.hacklondon2026.ui.components.InfoBox
 import com.example.hacklondon2026.ui.theme.*
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,14 +44,44 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             HackLondon2026Theme {
-                DeepFakeDetectorScreen()
+                DeepFakeDetectorScreen(
+                    onAnalyzeClick = { uri ->
+                        analyzeVideo(uri)
+                    }
+                )
+            }
+        }
+    }
+
+    private fun analyzeVideo(uri: Uri) {
+        lifecycleScope.launch {
+            try {
+                // Showing a toast for feedback
+                Toast.makeText(this@MainActivity, "Analyzing video...", Toast.LENGTH_SHORT).show()
+                
+                val response = NetworkClient.apiService.analyzeVideo(
+                    DetectionRequest(videoUri = uri.toString())
+                )
+                
+                // Handle the response
+                val resultText = if (response.isDeepfake) {
+                    "Warning: Deepfake detected! (Confidence: ${response.confidence})"
+                } else {
+                    "Success: Video appears authentic. (Confidence: ${response.confidence})"
+                }
+                
+                Toast.makeText(this@MainActivity, resultText, Toast.LENGTH_LONG).show()
+                
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                e.printStackTrace()
             }
         }
     }
 }
 
 @Composable
-fun DeepFakeDetectorScreen() {
+fun DeepFakeDetectorScreen(onAnalyzeClick: (Uri) -> Unit) {
     val context = LocalContext.current
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
     
@@ -89,6 +121,15 @@ fun DeepFakeDetectorScreen() {
                 
                 if (selectedVideoUri != null) {
                     SelectedVideoInfo(selectedVideoUri!!)
+                    
+                    Button(
+                        onClick = { onAnalyzeClick(selectedVideoUri!!) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MainBlue),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Analyze Video", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
                 
                 ActionButtons(
@@ -277,6 +318,6 @@ fun BottomNavigationBar() {
 @Composable
 fun DefaultPreview() {
     HackLondon2026Theme {
-        DeepFakeDetectorScreen()
+        DeepFakeDetectorScreen(onAnalyzeClick = {})
     }
 }
