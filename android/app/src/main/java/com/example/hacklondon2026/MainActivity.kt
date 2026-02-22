@@ -90,7 +90,11 @@ fun DeepFakeDetectorScreen(onAnalyzeClick: (Uri) -> Unit) {
         onResult = { uri ->
             selectedVideoUri = uri
             if (uri != null) {
-                Toast.makeText(context, "Video selected!", Toast.LENGTH_SHORT).show()
+                // Launch analysis activity immediately when video is selected
+                val intent = Intent(context, VideoAnalysisActivity::class.java).apply {
+                    putExtra("VIDEO_URI", uri)
+                }
+                context.startActivity(intent)
             }
         }
     )
@@ -169,7 +173,7 @@ fun SelectedVideoInfo(uri: Uri) {
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(
-                    text = "Video Ready for Analysis",
+                    text = "Video Selected",
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
