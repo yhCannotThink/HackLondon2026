@@ -22,7 +22,7 @@ import com.presage.physiology.proto.StatusProto
 import timber.log.Timber
 import java.lang.ref.WeakReference
 
-internal class MediapipeGraphViewModel private constructor(context: Context) : ViewModel() {
+class MediapipeGraphViewModel private constructor(context: Context) : ViewModel() {
     lateinit var currentSmartSpectraMode: SmartSpectraMode
     private val BINARY_GRAPH_NAME: String
         get () {
@@ -151,7 +151,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
      * Called when the MediaPipe graph encounters an unrecoverable error.
      * Transitions the processing state to [ProcessingStatus.ERROR].
      */
-    internal fun handleGraphError(runtimeException: RuntimeException?) {
+    fun handleGraphError(runtimeException: RuntimeException?) {
         Timber.e("Runtime exception occured in graph: ${runtimeException}")
         _processingState.postValue(ProcessingStatus.ERROR)
     }
@@ -170,7 +170,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
     }
 
     /** Updates [_timeLeft] with the latest countdown value from the graph. */
-    internal fun handleTimeLeftPacket(packet: Packet?) {
+    fun handleTimeLeftPacket(packet: Packet?) {
         if (packet == null) return
         _timeLeft.postValue(PacketGetter.getFloat64(packet))
 
@@ -183,7 +183,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
     /**
      * Receives a [MetricsBuffer] proto from the graph and updates observers.
      */
-    internal fun handleMetricsBufferPacket(packet: Packet?) {
+    fun handleMetricsBufferPacket(packet: Packet?) {
         if (packet == null) return
         val metricsBuffer = PacketGetter.getProto(packet, MetricsBuffer.parser())
 
@@ -205,7 +205,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
     /**
      * Receives edge [Metrics] proto from the graph for continuous mode and updates observers.
      */
-    internal fun handleEdgeMetricsPacket(packet: Packet?) {
+    fun handleEdgeMetricsPacket(packet: Packet?) {
         if (packet == null) return
         val edgeMetrics = PacketGetter.getProto(packet, Metrics.parser())
 
@@ -219,7 +219,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
     }
 
     /** Processes graph status updates and adjusts UI state accordingly. */
-    internal fun handleStatusCodePacket(packet: Packet?) {
+    fun handleStatusCodePacket(packet: Packet?) {
         if (packet == null) return
         val newStatusCodeMessage: StatusProto.StatusValue = PacketGetter.getProto(packet, StatusProto.StatusValue.parser())
         val newStatusCode = newStatusCodeMessage.value
@@ -298,18 +298,18 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
      * Queues an [ImageProxy] for processing. Timestamp conversion to
      * microseconds is handled automatically.
      */
-    internal fun addNewFrame(imageProxy: ImageProxy) {
+    fun addNewFrame(imageProxy: ImageProxy) {
         processor?.onNewFrame(imageProxy.toBitmap(), imageProxy.imageInfo.timestamp / 1000L)
     }
 
     // add bitmap directly with timestamp
     /** Adds a raw [Bitmap] frame with a specified capture [timestamp]. */
-    internal fun addNewFrame(bitmap: Bitmap, timestamp: Long) {
+    fun addNewFrame(bitmap: Bitmap, timestamp: Long) {
         processor?.onNewFrame(bitmap, timestamp)
     }
 
     /** Handles record button presses based on the current [processingState]. */
-    internal fun recordButtonClickListener(view: View) {
+    fun recordButtonClickListener(view: View) {
         when (processingState.value) {
             ProcessingStatus.IDLE -> {
                 // start auth flow in case we need to refresh token
@@ -350,7 +350,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
      * Displays a countdown before recording begins. [onCountdownFinish] is
      * invoked when the timer completes.
      */
-    internal fun startCountdown(onCountdownFinish: () -> Unit) {
+    fun startCountdown(onCountdownFinish: () -> Unit) {
         _processingState.postValue(ProcessingStatus.COUNTDOWN)
         var secondsLeft = SmartSpectraSdkConfig.recordingDelay
         countdownTimer = object : CountDownTimer(secondsLeft * 1000L, 1000) {
@@ -373,7 +373,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
     }
 
     /** Restarts the MediaPipe graph using the latest configuration. */
-    internal fun restart() {
+    fun restart() {
         Timber.d("Restarting mediapipe graph")
         stop()
         currentSmartSpectraMode = SmartSpectraSdkConfig.smartSpectraMode
@@ -381,7 +381,7 @@ internal class MediapipeGraphViewModel private constructor(context: Context) : V
         _processingState.postValue(ProcessingStatus.IDLE)
     }
 
-    internal companion object {
+    companion object {
         @Volatile
         private var INSTANCE: MediapipeGraphViewModel? = null
         enum class ProcessingStatus {
