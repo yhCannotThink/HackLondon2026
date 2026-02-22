@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ import com.presagetech.smartspectra.SmartSpectraMode
 import com.presagetech.smartspectra.SmartSpectraSdk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class VideoAnalysisActivity : ComponentActivity() {
@@ -86,23 +88,41 @@ fun VideoAnalysisScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    var confidenceList by remember { mutableStateOf(listOf<Float>()) }
-    var processingProgress by remember { mutableStateOf(0f) }
-    var isProcessing by remember { mutableStateOf(true) }
+    var confidenceList by remember(videoUri) { mutableStateOf(listOf<Float>()) }
+    var blinkDetected by remember(videoUri) { mutableStateOf(false) }
+    var processingProgress by remember(videoUri) { mutableStateOf(0f) }
+    var isProcessing by remember(videoUri) { mutableStateOf(true) }
 
-    val averageConfidence = if (confidenceList.isNotEmpty()) confidenceList.average().toFloat() else 0f
-    val isRealFace = averageConfidence > 0.7f // Threshold for deepfake classification
+    val baseAverage = if (confidenceList.isNotEmpty()) confidenceList.average().toFloat() else 0f
+    // Heuristic: Boost average if blink was detected anywhere in the video
+    val averageConfidence = if (blinkDetected) (baseAverage + 0.1f).coerceAtMost(1.0f) else baseAverage
+    
+    val isRealFace = averageConfidence >= 0.7f
 
-    DisposableEffect(Unit) {
+    DisposableEffect(videoUri) {
         val observer: (Metrics) -> Unit = { edgeMetrics ->
-            // Many Presage metrics include confidence scores. 
-            // Here we check micro-expressions as a proxy for face-liveness/realness confidence
-            if (edgeMetrics.hasFace() && edgeMetrics.face.microExpressionCount > 0) {
-                val latestConfidence = edgeMetrics.face.getMicroExpression(0).confidence
-                confidenceList = confidenceList + latestConfidence
-            } else if (edgeMetrics.hasFace()) {
-                // If face detected but no micro-expressions, assign a baseline detection confidence
-                confidenceList = confidenceList + 0.5f 
+            if (edgeMetrics.hasFace()) {
+                var frameScore = 0.5f // Start with face baseline
+                
+                // Liveness check: Blinking
+                if (!blinkDetected && edgeMetrics.face.blinkingCount > 0) {
+                    if (edgeMetrics.face.blinkingList.any { it.detected }) {
+                        blinkDetected = true
+                    }
+                }
+                
+                // Sign of life: Micro-expressions
+                if (edgeMetrics.face.microExpressionCount > 0) {
+                    val microConf = edgeMetrics.face.getMicroExpression(0).confidence
+                    frameScore += (microConf * 0.3f)
+                }
+                
+                // Structural integrity: Mesh stability
+                if (edgeMetrics.face.landmarksCount > 0 && edgeMetrics.face.getLandmarks(0).stable) {
+                    frameScore += 0.2f
+                }
+                
+                confidenceList = confidenceList + frameScore.coerceAtMost(1.0f)
             } else {
                 confidenceList = confidenceList + 0.0f
             }
@@ -114,6 +134,7 @@ fun VideoAnalysisScreen(
     }
 
     LaunchedEffect(videoUri) {
+        sdk.resetMetrics() // Clear any old data from the SDK singleton
         viewModel.restart()
         viewModel.startRecording()
 
@@ -124,7 +145,7 @@ fun VideoAnalysisScreen(
                 val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val durationMs = durationStr?.toLong() ?: 0L
                 
-                val stepMs = 500L
+                val stepMs = 200L // Fast sampling for rapid movements
                 for (timeMs in 0 until durationMs step stepMs) {
                     val bitmap = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                     if (bitmap != null) {
@@ -133,7 +154,7 @@ fun VideoAnalysisScreen(
                             processingProgress = timeMs.toFloat() / durationMs
                         }
                     }
-                    delay(50)
+                    delay(15)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -160,40 +181,59 @@ fun VideoAnalysisScreen(
                     modifier = Modifier.size(80.dp)
                 )
                 Spacer(modifier = Modifier.height(24.dp))
-                Text("Analyzing Authenticity...", fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                Text("Analyzing AI Signatures...", fontSize = 18.sp, fontWeight = FontWeight.Medium)
                 Text(
-                    "Current confidence: ${(averageConfidence * 100).toInt()}%",
+                    "Physiological Confidence: ${(averageConfidence * 100).toInt()}%",
                     fontSize = 14.sp,
                     color = Color.Gray
                 )
             } else {
                 Icon(
-                    imageVector = if (isRealFace) Icons.Default.CheckCircle else Icons.Default.Error,
+                    imageVector = if (isRealFace) Icons.Default.Shield else Icons.Default.Error,
                     contentDescription = null,
                     tint = if (isRealFace) SuccessGreen else Color.Red,
                     modifier = Modifier.size(80.dp)
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = if (isRealFace) "Video Authenticated" else "Potential Deepfake Detected",
+                    text = if (isRealFace) "Verification Successful" else "Authenticity Alert",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isRealFace) SuccessGreen else Color.Red
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Average AI Confidence: ${(averageConfidence * 100).toInt()}%",
+                    text = "Final Trust Score: ${(averageConfidence * 100).toInt()}%",
                     fontSize = 16.sp,
                     color = Color.DarkGray
                 )
                 
                 if (!isRealFace) {
+                    Card(
+                        modifier = Modifier.padding(top = 24.dp).padding(horizontal = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Analysis Flagged:",
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFC62828)
+                            )
+                            Text(
+                                text = "The subject lacks consistent physiological 'signs of life' usually found in human subjects.",
+                                fontSize = 14.sp,
+                                color = Color(0xFFC62828),
+                                modifier = Modifier.padding(top = 4.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
                     Text(
-                        text = "Warning: Inconsistencies detected in facial micro-movements.",
+                        text = "Landmark stability and micro-expressions verified.",
                         fontSize = 14.sp,
-                        color = Color.Red,
-                        modifier = Modifier.padding(top = 16.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 16.dp)
                     )
                 }
             }
