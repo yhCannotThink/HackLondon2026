@@ -1,319 +1,91 @@
 require("dotenv").config();
 
-const crypto = require("crypto");
 const express = require("express");
-const fs = require("fs");
 const mongoose = require("mongoose");
-const os = require("os");
-const path = require("path");
-const {
-  Connection,
-  Keypair,
-  PublicKey,
-  Transaction,
-  TransactionInstruction,
-  sendAndConfirmTransaction,
-} = require("@solana/web3.js");
+const config = require("./config");
+const MediaSubmission = require("./models/mediaSubmission");
+const { buildClientSignTarget, signPayload, safeEqualHex } = require("./utils/signing");
+const { createSolanaService } = require("./solana/service");
 
 const app = express();
-const port = process.env.PORT || 3000;
-const maxClockSkewMs = Number(process.env.MAX_CLOCK_SKEW_MS || 5 * 60 * 1000);
-const clientId = process.env.CLIENT_ID || "android-app";
-const clientSecret = process.env.CLIENT_SECRET || "dev-client-secret";
-const solanaRpcUrl = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
-const solanaPrivateKeyJson = process.env.SOLANA_PRIVATE_KEY_JSON;
-const solanaKeypairPath =
-  process.env.SOLANA_KEYPAIR_PATH || path.join(os.homedir(), ".config", "solana", "devnet.json");
-const solanaRequired = process.env.SOLANA_REQUIRED === "true";
-const solanaVerifyOnRead = process.env.SOLANA_VERIFY_ON_READ !== "false";
-
-const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
-
-let solanaConnection = null;
-let solanaPayer = null;
-
-const mediaSubmissionSchema = new mongoose.Schema(
-  {
-    videoHash: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
-    mediaType: {
-      type: String,
-      required: true,
-      enum: ["video", "audio"],
-      default: "video",
-    },
-    metadata: {
-      type: mongoose.Schema.Types.Mixed,
-      required: true,
-    },
-    txId: {
-      type: String,
-      default: null,
-    },
-    authContext: {
-      clientId: { type: String, required: true },
-      timestamp: { type: Number, required: true },
-      nonce: { type: String, required: true },
-    },
-    firstSeenAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  {
-    versionKey: false,
-  }
-);
-
-const MediaSubmission = mongoose.model("MediaSubmission", mediaSubmissionSchema);
+const solanaService = createSolanaService(config.solana);
 
 app.use(express.json({ limit: "1mb" }));
 
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
+function validateSubmitPayload(payload) {
+  const { videoHash, metadata, mediaType = "video", auth } = payload || {};
+
+  if (!videoHash || typeof videoHash !== "string") {
+    return { status: 400, body: { error: "videoHash is required and must be a string" } };
   }
 
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    return { status: 400, body: { error: "metadata is required and must be an object" } };
   }
 
-  const keys = Object.keys(value).sort();
-  const serialized = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`);
-  return `{${serialized.join(",")}}`;
-}
-
-function signPayload(payload, secret) {
-  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
-}
-
-function safeEqualHex(a, b) {
-  if (typeof a !== "string" || typeof b !== "string") {
-    return false;
+  if (!["video", "audio"].includes(mediaType)) {
+    return { status: 400, body: { error: "mediaType must be either 'video' or 'audio'" } };
   }
 
-  const aBuffer = Buffer.from(a, "utf8");
-  const bBuffer = Buffer.from(b, "utf8");
-
-  if (aBuffer.length !== bBuffer.length) {
-    return false;
+  if (!auth || typeof auth !== "object") {
+    return { status: 400, body: { error: "auth is required" } };
   }
 
-  return crypto.timingSafeEqual(aBuffer, bBuffer);
-}
+  const { clientId: requestClientId, timestamp, nonce, requestSignature } = auth;
 
-function buildClientSignTarget(videoHash, mediaType, metadata, timestamp, nonce) {
-  return [videoHash, mediaType, stableStringify(metadata || {}), String(timestamp), nonce].join(".");
-}
-
-function initializeSolana() {
-  let keyMaterial = solanaPrivateKeyJson;
-
-  if (!keyMaterial) {
-    try {
-      keyMaterial = fs.readFileSync(solanaKeypairPath, "utf8").trim();
-    } catch (_error) {
-      console.warn(
-        "Solana integration disabled: neither SOLANA_PRIVATE_KEY_JSON nor a readable keypair file is available"
-      );
-      if (solanaRequired) {
-        throw new Error(
-          "Set SOLANA_PRIVATE_KEY_JSON or provide a readable SOLANA_KEYPAIR_PATH when SOLANA_REQUIRED=true"
-        );
-      }
-      return false;
-    }
+  if (!requestClientId || typeof requestClientId !== "string") {
+    return { status: 400, body: { error: "auth.clientId is required" } };
   }
 
-  let parsedSecret;
-
-  try {
-    parsedSecret = JSON.parse(keyMaterial);
-  } catch (error) {
-    if (solanaRequired) {
-      throw new Error("Solana key material must be a valid JSON array");
-    }
-    console.warn("Solana integration disabled: Solana key material is not valid JSON");
-    return false;
+  if (requestClientId !== config.clientId) {
+    return { status: 401, body: { error: "Unknown clientId" } };
   }
 
-  if (!Array.isArray(parsedSecret) || parsedSecret.length !== 64) {
-    if (solanaRequired) {
-      throw new Error("Solana key material must be an array of exactly 64 numbers");
-    }
-    console.warn("Solana integration disabled: secret key must be an array of 64 numbers");
-    return false;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    return {
+      status: 400,
+      body: { error: "auth.timestamp must be a unix time in milliseconds" },
+    };
   }
 
-  const hasInvalidByte = parsedSecret.some(
-    (value) => !Number.isInteger(value) || value < 0 || value > 255
-  );
-
-  if (hasInvalidByte) {
-    if (solanaRequired) {
-      throw new Error("Solana key material must contain byte values between 0 and 255");
-    }
-    console.warn("Solana integration disabled: secret key contains invalid byte values");
-    return false;
+  if (!nonce || typeof nonce !== "string") {
+    return { status: 400, body: { error: "auth.nonce is required" } };
   }
 
-  try {
-    solanaPayer = Keypair.fromSecretKey(Uint8Array.from(parsedSecret));
-  } catch (error) {
-    if (solanaRequired) {
-      throw error;
-    }
-    console.warn(`Solana integration disabled: ${error.message}`);
-    return false;
+  if (!requestSignature || typeof requestSignature !== "string") {
+    return { status: 400, body: { error: "auth.requestSignature is required" } };
   }
 
-  solanaConnection = new Connection(solanaRpcUrl, "confirmed");
-  console.log("Solana devnet integration enabled");
-  return true;
-}
-
-async function anchorHashOnSolana({ mediaType, videoHash, requestClientId, timestamp, nonce }) {
-  if (!solanaConnection || !solanaPayer) {
-    return null;
+  const now = Date.now();
+  if (Math.abs(now - timestamp) > config.maxClockSkewMs) {
+    return {
+      status: 401,
+      body: { error: "Request timestamp is outside allowed clock skew" },
+    };
   }
 
-  const memo = JSON.stringify({
-    m: mediaType,
-    h: videoHash,
-    c: requestClientId,
-    t: timestamp,
-    n: nonce.slice(0, 16),
-  });
-
-  const memoInstruction = new TransactionInstruction({
-    keys: [],
-    programId: MEMO_PROGRAM_ID,
-    data: Buffer.from(memo, "utf8"),
-  });
-
-  const transaction = new Transaction().add(memoInstruction);
-
-  const txId = await sendAndConfirmTransaction(solanaConnection, transaction, [solanaPayer], {
-    commitment: "confirmed",
-    preflightCommitment: "confirmed",
-  });
-
-  return txId;
-}
-
-function instructionProgramIdString(instruction) {
-  if (!instruction) {
-    return "";
+  const normalizedHash = videoHash.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalizedHash)) {
+    return { status: 400, body: { error: "videoHash must be a valid SHA-256 hex string" } };
   }
 
-  if (instruction.programId && typeof instruction.programId.toBase58 === "function") {
-    return instruction.programId.toBase58();
+  const signTarget = buildClientSignTarget(normalizedHash, mediaType, metadata, timestamp, nonce);
+  const expectedSignature = signPayload(signTarget, config.clientSecret);
+
+  if (!safeEqualHex(requestSignature, expectedSignature)) {
+    return { status: 401, body: { error: "Invalid requestSignature" } };
   }
 
-  if (instruction.programId && typeof instruction.programId.toString === "function") {
-    return instruction.programId.toString();
-  }
-
-  return "";
-}
-
-function extractMemoTextFromInstruction(instruction) {
-  if (!instruction) {
-    return null;
-  }
-
-  if (instruction.program === "spl-memo") {
-    if (typeof instruction.parsed === "string") {
-      return instruction.parsed;
-    }
-
-    if (instruction.parsed && typeof instruction.parsed.memo === "string") {
-      return instruction.parsed.memo;
-    }
-  }
-
-  const programIdText = instructionProgramIdString(instruction);
-  if (programIdText === MEMO_PROGRAM_ID.toBase58()) {
-    if (typeof instruction.parsed === "string") {
-      return instruction.parsed;
-    }
-
-    if (instruction.parsed && typeof instruction.parsed.memo === "string") {
-      return instruction.parsed.memo;
-    }
-  }
-
-  return null;
-}
-
-function findMatchingMemoPayload(instructions, expected) {
-  for (const instruction of instructions || []) {
-    const memoText = extractMemoTextFromInstruction(instruction);
-    if (!memoText) {
-      continue;
-    }
-
-    try {
-      const payload = JSON.parse(memoText);
-      const isMatch =
-        payload &&
-        payload.m === expected.mediaType &&
-        payload.h === expected.videoHash &&
-        payload.c === expected.requestClientId;
-
-      if (isMatch) {
-        return true;
-      }
-    } catch (_error) {
-      continue;
-    }
-  }
-
-  return false;
-}
-
-async function verifyAnchoredHashOnSolana({ txId, mediaType, videoHash, requestClientId }) {
-  if (!solanaConnection || !solanaPayer) {
-    throw new Error("Solana verification is unavailable");
-  }
-
-  const parsedTransaction = await solanaConnection.getParsedTransaction(txId, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
-
-  if (!parsedTransaction) {
-    return false;
-  }
-
-  const accountKeys = parsedTransaction.transaction?.message?.accountKeys || [];
-  const payerPublicKey = solanaPayer.publicKey.toBase58();
-  const payerPresent = accountKeys.some((keyEntry) => {
-    if (typeof keyEntry === "string") {
-      return keyEntry === payerPublicKey;
-    }
-
-    const keyText =
-      keyEntry && keyEntry.pubkey && typeof keyEntry.pubkey.toString === "function"
-        ? keyEntry.pubkey.toString()
-        : "";
-    return keyText === payerPublicKey;
-  });
-
-  if (!payerPresent) {
-    return false;
-  }
-
-  const instructions = parsedTransaction.transaction?.message?.instructions || [];
-  return findMatchingMemoPayload(instructions, {
-    mediaType,
-    videoHash,
-    requestClientId,
-  });
+  return {
+    normalized: {
+      videoHash: normalizedHash,
+      mediaType,
+      metadata,
+      requestClientId,
+      timestamp,
+      nonce,
+    },
+  };
 }
 
 app.get("/health", (_req, res) => {
@@ -321,77 +93,27 @@ app.get("/health", (_req, res) => {
 });
 
 app.post("/api/v1/videos/submit", async (req, res) => {
-  const { videoHash, metadata, mediaType = "video", auth } = req.body || {};
-
-  if (!videoHash || typeof videoHash !== "string") {
-    return res.status(400).json({ error: "videoHash is required and must be a string" });
+  const validation = validateSubmitPayload(req.body);
+  if (!validation.normalized) {
+    return res.status(validation.status).json(validation.body);
   }
 
-  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
-    return res.status(400).json({ error: "metadata is required and must be an object" });
-  }
-
-  if (!["video", "audio"].includes(mediaType)) {
-    return res.status(400).json({ error: "mediaType must be either 'video' or 'audio'" });
-  }
-
-  if (!auth || typeof auth !== "object") {
-    return res.status(400).json({ error: "auth is required" });
-  }
-
-  const { clientId: requestClientId, timestamp, nonce, requestSignature } = auth;
-
-  if (!requestClientId || typeof requestClientId !== "string") {
-    return res.status(400).json({ error: "auth.clientId is required" });
-  }
-
-  if (requestClientId !== clientId) {
-    return res.status(401).json({ error: "Unknown clientId" });
-  }
-
-  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
-    return res.status(400).json({ error: "auth.timestamp must be a unix time in milliseconds" });
-  }
-
-  if (!nonce || typeof nonce !== "string") {
-    return res.status(400).json({ error: "auth.nonce is required" });
-  }
-
-  if (!requestSignature || typeof requestSignature !== "string") {
-    return res.status(400).json({ error: "auth.requestSignature is required" });
-  }
-
-  const now = Date.now();
-  if (Math.abs(now - timestamp) > maxClockSkewMs) {
-    return res.status(401).json({ error: "Request timestamp is outside allowed clock skew" });
-  }
-
-  const normalizedHash = videoHash.trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(normalizedHash)) {
-    return res.status(400).json({ error: "videoHash must be a valid SHA-256 hex string" });
-  }
-
-  const signTarget = buildClientSignTarget(normalizedHash, mediaType, metadata, timestamp, nonce);
-  const expectedSignature = signPayload(signTarget, clientSecret);
-
-  if (!safeEqualHex(requestSignature, expectedSignature)) {
-    return res.status(401).json({ error: "Invalid requestSignature" });
-  }
+  const { videoHash, mediaType, metadata, requestClientId, timestamp, nonce } = validation.normalized;
 
   let alreadyExists = false;
   let txId = null;
 
   try {
-    const existing = await MediaSubmission.findOne({ videoHash: normalizedHash }).lean();
+    const existing = await MediaSubmission.findOne({ videoHash }).lean();
     alreadyExists = Boolean(existing);
     txId = existing?.txId || null;
 
-    if (alreadyExists && txId && solanaVerifyOnRead) {
+    if (alreadyExists && txId && config.solana.verifyOnRead) {
       try {
-        const isVerifiedOnChain = await verifyAnchoredHashOnSolana({
+        const isVerifiedOnChain = await solanaService.verifyAnchoredHash({
           txId,
           mediaType: existing.mediaType || mediaType,
-          videoHash: normalizedHash,
+          videoHash,
           requestClientId,
         });
 
@@ -406,9 +128,9 @@ app.post("/api/v1/videos/submit", async (req, res) => {
 
     if (!txId) {
       try {
-        txId = await anchorHashOnSolana({
+        txId = await solanaService.anchorHash({
           mediaType,
-          videoHash: normalizedHash,
+          videoHash,
           requestClientId,
           timestamp,
           nonce,
@@ -421,7 +143,7 @@ app.post("/api/v1/videos/submit", async (req, res) => {
 
     if (!alreadyExists) {
       await MediaSubmission.create({
-        videoHash: normalizedHash,
+        videoHash,
         mediaType,
         metadata,
         txId,
@@ -445,7 +167,7 @@ app.post("/api/v1/videos/submit", async (req, res) => {
   } catch (error) {
     if (error && error.code === 11000) {
       alreadyExists = true;
-      const existing = await MediaSubmission.findOne({ videoHash: normalizedHash }).lean();
+      const existing = await MediaSubmission.findOne({ videoHash }).lean();
       txId = existing?.txId || null;
     } else {
       console.error("MongoDB write/read error:", error);
@@ -463,18 +185,16 @@ app.post("/api/v1/videos/submit", async (req, res) => {
 });
 
 async function startServer() {
-  const mongoUri = process.env.MONGODB_URI;
-
-  if (!mongoUri) {
+  if (!config.mongoUri) {
     throw new Error("MONGODB_URI is required");
   }
 
-  await mongoose.connect(mongoUri);
+  await mongoose.connect(config.mongoUri);
   console.log("Connected to MongoDB Atlas");
-  initializeSolana();
+  solanaService.initialize();
 
-  app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+  app.listen(config.port, () => {
+    console.log(`Server running on port ${config.port}`);
   });
 }
 
