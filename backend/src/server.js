@@ -25,6 +25,7 @@ const solanaPrivateKeyJson = process.env.SOLANA_PRIVATE_KEY_JSON;
 const solanaKeypairPath =
   process.env.SOLANA_KEYPAIR_PATH || path.join(os.homedir(), ".config", "solana", "devnet.json");
 const solanaRequired = process.env.SOLANA_REQUIRED === "true";
+const solanaVerifyOnRead = process.env.SOLANA_VERIFY_ON_READ !== "false";
 
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
@@ -204,6 +205,117 @@ async function anchorHashOnSolana({ mediaType, videoHash, requestClientId, times
   return txId;
 }
 
+function instructionProgramIdString(instruction) {
+  if (!instruction) {
+    return "";
+  }
+
+  if (instruction.programId && typeof instruction.programId.toBase58 === "function") {
+    return instruction.programId.toBase58();
+  }
+
+  if (instruction.programId && typeof instruction.programId.toString === "function") {
+    return instruction.programId.toString();
+  }
+
+  return "";
+}
+
+function extractMemoTextFromInstruction(instruction) {
+  if (!instruction) {
+    return null;
+  }
+
+  if (instruction.program === "spl-memo") {
+    if (typeof instruction.parsed === "string") {
+      return instruction.parsed;
+    }
+
+    if (instruction.parsed && typeof instruction.parsed.memo === "string") {
+      return instruction.parsed.memo;
+    }
+  }
+
+  const programIdText = instructionProgramIdString(instruction);
+  if (programIdText === MEMO_PROGRAM_ID.toBase58()) {
+    if (typeof instruction.parsed === "string") {
+      return instruction.parsed;
+    }
+
+    if (instruction.parsed && typeof instruction.parsed.memo === "string") {
+      return instruction.parsed.memo;
+    }
+  }
+
+  return null;
+}
+
+function findMatchingMemoPayload(instructions, expected) {
+  for (const instruction of instructions || []) {
+    const memoText = extractMemoTextFromInstruction(instruction);
+    if (!memoText) {
+      continue;
+    }
+
+    try {
+      const payload = JSON.parse(memoText);
+      const isMatch =
+        payload &&
+        payload.m === expected.mediaType &&
+        payload.h === expected.videoHash &&
+        payload.c === expected.requestClientId;
+
+      if (isMatch) {
+        return true;
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  return false;
+}
+
+async function verifyAnchoredHashOnSolana({ txId, mediaType, videoHash, requestClientId }) {
+  if (!solanaConnection || !solanaPayer) {
+    throw new Error("Solana verification is unavailable");
+  }
+
+  const parsedTransaction = await solanaConnection.getParsedTransaction(txId, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+
+  if (!parsedTransaction) {
+    return false;
+  }
+
+  const accountKeys = parsedTransaction.transaction?.message?.accountKeys || [];
+  const payerPublicKey = solanaPayer.publicKey.toBase58();
+  const payerPresent = accountKeys.some((keyEntry) => {
+    if (typeof keyEntry === "string") {
+      return keyEntry === payerPublicKey;
+    }
+
+    const keyText =
+      keyEntry && keyEntry.pubkey && typeof keyEntry.pubkey.toString === "function"
+        ? keyEntry.pubkey.toString()
+        : "";
+    return keyText === payerPublicKey;
+  });
+
+  if (!payerPresent) {
+    return false;
+  }
+
+  const instructions = parsedTransaction.transaction?.message?.instructions || [];
+  return findMatchingMemoPayload(instructions, {
+    mediaType,
+    videoHash,
+    requestClientId,
+  });
+}
+
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
@@ -273,6 +385,24 @@ app.post("/api/v1/videos/submit", async (req, res) => {
     const existing = await MediaSubmission.findOne({ videoHash: normalizedHash }).lean();
     alreadyExists = Boolean(existing);
     txId = existing?.txId || null;
+
+    if (alreadyExists && txId && solanaVerifyOnRead) {
+      try {
+        const isVerifiedOnChain = await verifyAnchoredHashOnSolana({
+          txId,
+          mediaType: existing.mediaType || mediaType,
+          videoHash: normalizedHash,
+          requestClientId,
+        });
+
+        if (!isVerifiedOnChain) {
+          return res.status(409).json({ error: "Stored txId failed on-chain verification" });
+        }
+      } catch (error) {
+        console.error("Solana verify-on-read error:", error);
+        return res.status(502).json({ error: "Failed to verify existing txId on Solana devnet" });
+      }
+    }
 
     if (!txId) {
       try {

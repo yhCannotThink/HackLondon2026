@@ -3,6 +3,10 @@ require("dotenv").config();
 const assert = require("assert");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { MongoClient } = require("mongodb");
 
 if (typeof fetch !== "function") {
   throw new Error("Global fetch is not available. Use Node.js 18+.");
@@ -12,6 +16,9 @@ const CLIENT_ID = "android-app";
 const CLIENT_SECRET = "dev-client-secret";
 const MONGODB_URI = process.env.MONGODB_URI;
 const SOLANA_PRIVATE_KEY_JSON = process.env.SOLANA_PRIVATE_KEY_JSON;
+const SOLANA_KEYPAIR_PATH =
+  process.env.SOLANA_KEYPAIR_PATH || path.join(os.homedir(), ".config", "solana", "devnet.json");
+const SOLANA_VERIFY_ON_READ = process.env.SOLANA_VERIFY_ON_READ !== "false";
 
 if (!MONGODB_URI) {
   console.error("MONGODB_URI is required to run API tests.");
@@ -43,6 +50,24 @@ function buildClientSignTarget(videoHash, mediaType, metadata, timestamp, nonce)
 
 function randomSha256Hex() {
   return crypto.randomBytes(32).toString("hex");
+}
+
+function isSolanaConfigured() {
+  if (typeof SOLANA_PRIVATE_KEY_JSON === "string" && SOLANA_PRIVATE_KEY_JSON.trim()) {
+    return true;
+  }
+
+  try {
+    const keyFile = fs.readFileSync(SOLANA_KEYPAIR_PATH, "utf8").trim();
+    return Boolean(keyFile);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function mutateSignaturePreservingBase58(input) {
+  const replacement = input.endsWith("2") ? "3" : "2";
+  return `${input.slice(0, -1)}${replacement}`;
 }
 
 async function sleep(ms) {
@@ -122,6 +147,7 @@ async function postJson(url, payload) {
   const port = 3300 + Math.floor(Math.random() * 1000);
   const baseUrl = `http://127.0.0.1:${port}`;
   const serverLogs = { current: "" };
+  const solanaConfigured = isSolanaConfigured();
 
   const server = spawn(process.execPath, ["src/server.js"], {
     cwd: process.cwd(),
@@ -171,7 +197,7 @@ async function postJson(url, payload) {
     assert.equal(validResult.response.status, 200);
     assert.equal(validResult.body.status, "verified");
     assert.equal(validResult.body.alreadyExists, false);
-    if (SOLANA_PRIVATE_KEY_JSON) {
+    if (solanaConfigured) {
       assert.equal(typeof validResult.body.txId, "string");
       assert.ok(validResult.body.txId.length > 0);
     } else {
@@ -185,6 +211,28 @@ async function postJson(url, payload) {
     assert.equal(duplicateResult.body.alreadyExists, true);
     assert.equal(duplicateResult.body.txId, validResult.body.txId);
     console.log("✓ duplicate hash marked as alreadyExists");
+
+    if (solanaConfigured && SOLANA_VERIFY_ON_READ) {
+      const dbClient = await MongoClient.connect(MONGODB_URI);
+      try {
+        const database = dbClient.db();
+        const corruptedTxId = mutateSignaturePreservingBase58(validResult.body.txId);
+        await database.collection("mediasubmissions").updateOne(
+          { videoHash: uniqueVideoHash },
+          { $set: { txId: corruptedTxId } }
+        );
+
+        const verifyOnReadResult = await postJson(`${baseUrl}/api/v1/videos/submit`, validPayload);
+        assert.equal(verifyOnReadResult.response.status, 409);
+        assert.equal(
+          verifyOnReadResult.body.error,
+          "Stored txId failed on-chain verification"
+        );
+        console.log("✓ verify-on-read rejects tampered stored txId");
+      } finally {
+        await dbClient.close();
+      }
+    }
 
     const badSignaturePayload = {
       ...validPayload,
