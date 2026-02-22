@@ -2,7 +2,10 @@ require("dotenv").config();
 
 const crypto = require("crypto");
 const express = require("express");
+const fs = require("fs");
 const mongoose = require("mongoose");
+const os = require("os");
+const path = require("path");
 const {
   Connection,
   Keypair,
@@ -19,6 +22,8 @@ const clientId = process.env.CLIENT_ID || "android-app";
 const clientSecret = process.env.CLIENT_SECRET || "dev-client-secret";
 const solanaRpcUrl = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const solanaPrivateKeyJson = process.env.SOLANA_PRIVATE_KEY_JSON;
+const solanaKeypairPath =
+  process.env.SOLANA_KEYPAIR_PATH || path.join(os.homedir(), ".config", "solana", "devnet.json");
 const solanaRequired = process.env.SOLANA_REQUIRED === "true";
 
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -105,29 +110,39 @@ function buildClientSignTarget(videoHash, mediaType, metadata, timestamp, nonce)
 }
 
 function initializeSolana() {
-  if (!solanaPrivateKeyJson) {
-    console.warn("Solana integration disabled: SOLANA_PRIVATE_KEY_JSON is not set");
-    if (solanaRequired) {
-      throw new Error("SOLANA_PRIVATE_KEY_JSON is required when SOLANA_REQUIRED=true");
+  let keyMaterial = solanaPrivateKeyJson;
+
+  if (!keyMaterial) {
+    try {
+      keyMaterial = fs.readFileSync(solanaKeypairPath, "utf8").trim();
+    } catch (_error) {
+      console.warn(
+        "Solana integration disabled: neither SOLANA_PRIVATE_KEY_JSON nor a readable keypair file is available"
+      );
+      if (solanaRequired) {
+        throw new Error(
+          "Set SOLANA_PRIVATE_KEY_JSON or provide a readable SOLANA_KEYPAIR_PATH when SOLANA_REQUIRED=true"
+        );
+      }
+      return false;
     }
-    return false;
   }
 
   let parsedSecret;
 
   try {
-    parsedSecret = JSON.parse(solanaPrivateKeyJson);
+    parsedSecret = JSON.parse(keyMaterial);
   } catch (error) {
     if (solanaRequired) {
-      throw new Error("SOLANA_PRIVATE_KEY_JSON must be a valid JSON array");
+      throw new Error("Solana key material must be a valid JSON array");
     }
-    console.warn("Solana integration disabled: SOLANA_PRIVATE_KEY_JSON is not valid JSON");
+    console.warn("Solana integration disabled: Solana key material is not valid JSON");
     return false;
   }
 
   if (!Array.isArray(parsedSecret) || parsedSecret.length !== 64) {
     if (solanaRequired) {
-      throw new Error("SOLANA_PRIVATE_KEY_JSON must be an array of exactly 64 numbers");
+      throw new Error("Solana key material must be an array of exactly 64 numbers");
     }
     console.warn("Solana integration disabled: secret key must be an array of 64 numbers");
     return false;
@@ -139,7 +154,7 @@ function initializeSolana() {
 
   if (hasInvalidByte) {
     if (solanaRequired) {
-      throw new Error("SOLANA_PRIVATE_KEY_JSON must contain byte values between 0 and 255");
+      throw new Error("Solana key material must contain byte values between 0 and 255");
     }
     console.warn("Solana integration disabled: secret key contains invalid byte values");
     return false;
