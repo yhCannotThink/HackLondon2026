@@ -7,7 +7,11 @@ plugins {
 }
 
 val localProperties = Properties()
-val localPropertiesFile = rootProject.file("local.properties")
+// Check for local.properties in current directory and root project directory
+val localPropertiesFile = project.file("local.properties").let {
+    if (it.exists()) it else rootProject.file("local.properties")
+}
+
 if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.inputStream())
 }
@@ -28,7 +32,9 @@ android {
             useSupportLibrary = true
         }
 
-        buildConfigField("String", "PRESAGE_API_KEY", "\"${localProperties.getProperty("PRESAGE_API_KEY") ?: ""}\"")
+        // Use the key from local.properties or an empty string if not found
+        val apiKey = localProperties.getProperty("PRESAGE_API_KEY") ?: ""
+        buildConfigField("String", "PRESAGE_API_KEY", "\"${apiKey}\"")
     }
 
     buildTypes {
