@@ -97,7 +97,7 @@ fun VideoAnalysisScreen(
     // Heuristic: Boost average if blink was detected anywhere in the video
     val averageConfidence = if (blinkDetected) (baseAverage + 0.1f).coerceAtMost(1.0f) else baseAverage
     
-    val isRealFace = averageConfidence > 0.72f 
+    val isRealFace = averageConfidence >= 0.7f
 
     DisposableEffect(videoUri) {
         val observer: (Metrics) -> Unit = { edgeMetrics ->
@@ -134,6 +134,7 @@ fun VideoAnalysisScreen(
     }
 
     LaunchedEffect(videoUri) {
+        sdk.resetMetrics() // Clear any old data from the SDK singleton
         viewModel.restart()
         viewModel.startRecording()
 
