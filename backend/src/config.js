@@ -3,6 +3,7 @@ const path = require("path");
 
 const config = {
   port: process.env.PORT || 3000,
+  requestBodyLimit: process.env.REQUEST_BODY_LIMIT || "10mb",
   maxClockSkewMs: Number(process.env.MAX_CLOCK_SKEW_MS || 5 * 60 * 1000),
   clientId: process.env.CLIENT_ID || "android-app",
   clientSecret: process.env.CLIENT_SECRET || "dev-client-secret",
